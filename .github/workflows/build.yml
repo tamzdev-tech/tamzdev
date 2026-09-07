@@ -43,7 +43,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -67,21 +66,23 @@ jobs:
           echo "DOWNLOADING PROJECT"
           echo "=========================================="
 
-          if [ -n "$ZIP_URL" ]; then
+          if [ -n "$ZIP_URL" ] && [ "$ZIP_URL" != "null" ]; then
             echo "Downloading from URL..."
 
-            curl -L \
+            curl \
+              -L \
               --fail \
               --retry 3 \
+              --retry-delay 2 \
               --connect-timeout 30 \
               "$ZIP_URL" \
               -o project.zip
 
-          elif [ -n "$ZIP_PATH" ]; then
+          elif [ -n "$ZIP_PATH" ] && [ "$ZIP_PATH" != "null" ]; then
             echo "Using ZIP from repository..."
 
             if [ ! -f "$ZIP_PATH" ]; then
-              echo "ERROR: ZIP file tidak ditemukan!"
+              echo "ERROR: ZIP_PATH tidak ditemukan!"
               exit 1
             fi
 
@@ -99,20 +100,45 @@ jobs:
 
           ls -lh project.zip
 
+          echo ""
+          echo "File type:"
           file project.zip
 
           echo ""
-          echo "Testing ZIP..."
+          echo "=========================================="
+          echo "TESTING ZIP ARCHIVE"
+          echo "=========================================="
 
-          if ! unzip -t project.zip > /dev/null 2>&1; then
-            echo "ERROR: File bukan ZIP yang valid!"
+          # Tampilkan error ZIP secara langsung
+          set +e
+          unzip -t project.zip
+          ZIP_STATUS=$?
+          set -e
 
-            echo "Detected type:"
+          echo ""
+          echo "ZIP test exit code: $ZIP_STATUS"
+
+          if [ "$ZIP_STATUS" -ne 0 ]; then
+            echo ""
+            echo "=========================================="
+            echo "ERROR: ZIP ARCHIVE RUSAK ATAU TIDAK LENGKAP"
+            echo "=========================================="
+
+            echo ""
+            echo "File information:"
             file project.zip
+
+            echo ""
+            echo "File size:"
+            ls -lh project.zip
+
+            echo ""
+            echo "ZIP tidak dapat diverifikasi."
 
             exit 1
           fi
 
+          echo ""
           echo "ZIP VALID!"
 
       - name: Extract Project
@@ -125,8 +151,9 @@ jobs:
 
           mkdir -p my_project
 
-          unzip -q project.zip -d my_project
+          unzip -o project.zip -d my_project
 
+          echo ""
           echo "Extraction selesai."
 
       - name: Find Android Project
@@ -144,12 +171,14 @@ jobs:
             -quit)
 
           if [ -z "$PROJECT_FILE" ]; then
-            echo "ERROR: settings.gradle tidak ditemukan!"
+            echo ""
+            echo "ERROR: Project Android Gradle tidak ditemukan!"
+            echo "settings.gradle/settings.gradle.kts tidak ditemukan."
 
             echo ""
-            echo "Isi folder:"
+            echo "Isi project:"
 
-            find my_project -maxdepth 3 -type f | head -100
+            find my_project -maxdepth 4 -type f | head -100
 
             exit 1
           fi
@@ -158,6 +187,7 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
+          echo ""
           echo "Project ditemukan:"
           echo "$PROJECT_DIR"
 
@@ -172,18 +202,27 @@ jobs:
           echo "Project directory:"
           echo "$PROJECT_DIR"
 
+          echo ""
           ls -la "$PROJECT_DIR"
+
+          echo ""
 
           if [ ! -f "$PROJECT_DIR/gradlew" ]; then
             echo "ERROR: gradlew tidak ditemukan!"
             exit 1
           fi
 
+          echo "gradlew ditemukan."
+
       - name: Setup Gradle
         run: |
           set -e
 
           cd "$PROJECT_DIR"
+
+          echo "=========================================="
+          echo "SETTING UP GRADLE"
+          echo "=========================================="
 
           chmod +x gradlew
 
@@ -206,14 +245,20 @@ jobs:
           ./gradlew clean
 
           if [ "$BUILD_TYPE" = "Release" ]; then
-            echo "Building Release APK..."
-            ./gradlew assembleRelease
+            echo "Building RELEASE APK..."
+
+            ./gradlew assembleRelease --stacktrace
+
           else
-            echo "Building Debug APK..."
-            ./gradlew assembleDebug
+            echo "Building DEBUG APK..."
+
+            ./gradlew assembleDebug --stacktrace
           fi
 
-          echo "BUILD SUCCESS!"
+          echo ""
+          echo "=========================================="
+          echo "BUILD SUCCESS"
+          echo "=========================================="
 
       - name: Find APK
         env:
@@ -224,6 +269,11 @@ jobs:
           echo "=========================================="
           echo "SEARCHING APK"
           echo "=========================================="
+
+          echo ""
+          echo "All APK files:"
+
+          find "$PROJECT_DIR" -type f -name "*.apk" -print || true
 
           if [ "$BUILD_TYPE" = "Release" ]; then
 
@@ -244,11 +294,19 @@ jobs:
 
           fi
 
-          echo "Semua APK yang ditemukan:"
+          # Jika Release hanya menghasilkan unsigned APK
+          if [ -z "$APK_FILE" ]; then
 
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
+            APK_FILE=$(find "$PROJECT_DIR" \
+              -type f \
+              -name "*.apk" \
+              -print \
+              -quit)
+
+          fi
 
           if [ -z "$APK_FILE" ]; then
+            echo ""
             echo "ERROR: APK tidak ditemukan!"
             exit 1
           fi
@@ -260,6 +318,9 @@ jobs:
           rm -f final.apk
 
           cp "$APK_FILE" final.apk
+
+          echo ""
+          echo "Final APK:"
 
           ls -lh final.apk
 
@@ -284,7 +345,7 @@ jobs:
           echo "SENDING APK TO TELEGRAM"
           echo "=========================================="
 
-          if [ ! -f final.apk ]; then
+          if [ ! -f "final.apk" ]; then
             echo "ERROR: final.apk tidak ditemukan!"
             exit 1
           fi
@@ -299,10 +360,14 @@ jobs:
             exit 1
           fi
 
+          echo ""
           echo "APK:"
           ls -lh final.apk
 
           CAPTION="Build ${BUILD_TYPE} selesai - ${APP_NAME}"
+
+          echo ""
+          echo "Uploading APK to Telegram..."
 
           RESPONSE=$(curl \
             -sS \
@@ -320,8 +385,18 @@ jobs:
           echo "$RESPONSE"
 
           if echo "$RESPONSE" | grep -q '"ok":true'; then
+            echo ""
+            echo "=========================================="
+            echo "SUCCESS"
+            echo "=========================================="
+
             echo "APK berhasil dikirim ke Telegram."
           else
-            echo "ERROR: APK gagal dikirim ke Telegram."
+            echo ""
+            echo "=========================================="
+            echo "FAILED"
+            echo "=========================================="
+
+            echo "APK gagal dikirim ke Telegram."
             exit 1
           fi
