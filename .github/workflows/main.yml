@@ -1,0 +1,636 @@
+name: Build Android APK & Send to Telegram
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      job_id:
+        description: 'Job ID'
+        required: false
+        type: string
+
+      zip_path:
+        description: 'Path to zip file'
+        required: false
+        type: string
+
+      zip_url:
+        description: 'URL file ZIP'
+        required: false
+        type: string
+
+      app_name:
+        description: 'Nama Aplikasi'
+        required: false
+        default: 'Android App'
+        type: string
+
+      user_id:
+        description: 'ID Telegram User'
+        required: false
+        type: string
+
+      build_type:
+        description: 'Debug or Release'
+        required: false
+        default: 'Debug'
+        type: string
+
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ==========================================
+      # CHECKOUT
+      # ==========================================
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+
+      # ==========================================
+      # JAVA
+      # ==========================================
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+
+      # ==========================================
+      # DOWNLOAD PROJECT
+      # ==========================================
+
+      - name: Download & Extract Android Project
+        env:
+          ZIP_URL: ${{ github.event.inputs.zip_url }}
+          ZIP_PATH: ${{ github.event.inputs.zip_path }}
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "DOWNLOAD ANDROID PROJECT"
+          echo "=========================================="
+
+          rm -f project.zip
+          rm -rf my_project
+
+          # ==========================================
+          # DOWNLOAD FROM URL
+          # ==========================================
+
+          if [ -n "$ZIP_URL" ] && [ "$ZIP_URL" != "null" ]; then
+
+            echo "Downloading ZIP from URL..."
+            echo "URL provided."
+
+            curl \
+              -L \
+              --fail \
+              --retry 3 \
+              --retry-delay 2 \
+              --connect-timeout 30 \
+              "$ZIP_URL" \
+              -o project.zip
+
+
+          # ==========================================
+          # COPY ZIP FROM REPOSITORY
+          # ==========================================
+
+          elif [ -n "$ZIP_PATH" ] && [ "$ZIP_PATH" != "null" ]; then
+
+            echo "Using ZIP from repository..."
+
+            if [ ! -f "$ZIP_PATH" ]; then
+
+              echo "ERROR: ZIP_PATH tidak ditemukan!"
+              echo "Path: $ZIP_PATH"
+
+              exit 1
+
+            fi
+
+            cp "$ZIP_PATH" project.zip
+
+
+          else
+
+            echo "=========================================="
+            echo "ERROR"
+            echo "=========================================="
+
+            echo "Tidak ada ZIP URL atau ZIP Path!"
+
+            exit 1
+
+          fi
+
+
+          # ==========================================
+          # CHECK DOWNLOADED FILE
+          # ==========================================
+
+          echo ""
+          echo "=========================================="
+          echo "CHECKING DOWNLOADED FILE"
+          echo "=========================================="
+
+          echo ""
+          echo "File information:"
+
+          ls -lh project.zip
+
+          echo ""
+          echo "Detected file type:"
+
+          file project.zip
+
+
+          # ==========================================
+          # VALIDATE ZIP
+          # ==========================================
+
+          echo ""
+          echo "=========================================="
+          echo "VALIDATING ZIP"
+          echo "=========================================="
+
+          if ! unzip -t project.zip > /dev/null 2>&1; then
+
+            echo ""
+            echo "=========================================="
+            echo "ERROR: INVALID ZIP FILE"
+            echo "=========================================="
+
+            echo ""
+            echo "File yang didownload bukan ZIP yang valid."
+
+            echo ""
+            echo "Detected file type:"
+
+            file project.zip
+
+            echo ""
+            echo "File size:"
+
+            ls -lh project.zip
+
+            echo ""
+            echo "First 300 bytes:"
+
+            head -c 300 project.zip || true
+
+            echo ""
+
+            exit 1
+
+          fi
+
+          echo "ZIP FILE VALID!"
+
+
+          # ==========================================
+          # EXTRACT PROJECT
+          # ==========================================
+
+          echo ""
+          echo "=========================================="
+          echo "EXTRACTING PROJECT"
+          echo "=========================================="
+
+          mkdir -p my_project
+
+          unzip -q project.zip -d my_project
+
+          echo "Extraction completed."
+
+
+          # ==========================================
+          # SEARCH GRADLE PROJECT
+          # ==========================================
+
+          echo ""
+          echo "=========================================="
+          echo "SEARCHING ANDROID GRADLE PROJECT"
+          echo "=========================================="
+
+          PROJECT_FILE=$(find my_project \
+            -type f \
+            \( \
+              -name "settings.gradle" \
+              -o \
+              -name "settings.gradle.kts" \
+            \) \
+            -print \
+            -quit)
+
+          if [ -z "$PROJECT_FILE" ]; then
+
+            echo ""
+            echo "=========================================="
+            echo "ERROR"
+            echo "=========================================="
+
+            echo "Project Android Gradle tidak ditemukan!"
+            echo ""
+            echo "File yang dicari:"
+            echo "- settings.gradle"
+            echo "- settings.gradle.kts"
+
+            echo ""
+            echo "Isi ZIP:"
+
+            find my_project -maxdepth 3 -type f | head -50
+
+            exit 1
+
+          fi
+
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+
+          echo ""
+          echo "=========================================="
+          echo "PROJECT FOUND"
+          echo "=========================================="
+
+          echo "Project directory:"
+
+          echo "$PROJECT_DIR"
+
+          echo "$PROJECT_DIR" > project_path.txt
+
+
+      # ==========================================
+      # CHECK PROJECT STRUCTURE
+      # ==========================================
+
+      - name: Check Project Structure
+        run: |
+          set -e
+
+          PROJECT_DIR=$(cat project_path.txt)
+
+          echo "=========================================="
+          echo "PROJECT STRUCTURE"
+          echo "=========================================="
+
+          echo ""
+          echo "Project directory:"
+
+          echo "$PROJECT_DIR"
+
+          echo ""
+          echo "Files:"
+
+          ls -la "$PROJECT_DIR"
+
+          echo ""
+          echo "Checking Gradle files..."
+
+          if [ -f "$PROJECT_DIR/build.gradle" ]; then
+            echo "✓ build.gradle found"
+          fi
+
+          if [ -f "$PROJECT_DIR/build.gradle.kts" ]; then
+            echo "✓ build.gradle.kts found"
+          fi
+
+          if [ -f "$PROJECT_DIR/gradlew" ]; then
+            echo "✓ gradlew found"
+          fi
+
+          if [ -d "$PROJECT_DIR/app" ]; then
+            echo "✓ app directory found"
+          fi
+
+
+      # ==========================================
+      # GRADLE PERMISSION
+      # ==========================================
+
+      - name: Setup Gradle Permission
+        run: |
+          set -e
+
+          PROJECT_DIR=$(cat project_path.txt)
+
+          cd "$PROJECT_DIR"
+
+          echo "=========================================="
+          echo "SETUP GRADLE"
+          echo "=========================================="
+
+          if [ ! -f "./gradlew" ]; then
+
+            echo "ERROR: gradlew tidak ditemukan!"
+
+            exit 1
+
+          fi
+
+          chmod +x gradlew
+
+          echo "gradlew permission granted."
+
+          ls -la gradlew
+
+
+      # ==========================================
+      # CHECK GRADLE
+      # ==========================================
+
+      - name: Check Gradle
+        run: |
+          set -e
+
+          PROJECT_DIR=$(cat project_path.txt)
+
+          cd "$PROJECT_DIR"
+
+          echo "=========================================="
+          echo "GRADLE VERSION"
+          echo "=========================================="
+
+          ./gradlew --version
+
+
+      # ==========================================
+      # BUILD APK
+      # ==========================================
+
+      - name: Build APK
+        env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type }}
+        run: |
+          set -e
+
+          PROJECT_DIR=$(cat project_path.txt)
+
+          cd "$PROJECT_DIR"
+
+          echo ""
+          echo "=========================================="
+          echo "BUILDING APK"
+          echo "=========================================="
+
+          echo "Build Type: $BUILD_TYPE"
+
+          ./gradlew clean
+
+          if [ "$BUILD_TYPE" = "Release" ] || [ "$BUILD_TYPE" = "release" ]; then
+
+            echo ""
+            echo "Building RELEASE APK..."
+
+            ./gradlew assembleRelease
+
+          else
+
+            echo ""
+            echo "Building DEBUG APK..."
+
+            ./gradlew assembleDebug
+
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "BUILD COMPLETED"
+          echo "=========================================="
+
+
+      # ==========================================
+      # FIND APK
+      # ==========================================
+
+      - name: Find APK
+        env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type }}
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "SEARCHING APK"
+          echo "=========================================="
+
+          echo ""
+          echo "All APK files found:"
+
+          find my_project -type f -name "*.apk" -print
+
+          echo ""
+
+          if [ "$BUILD_TYPE" = "Release" ] || [ "$BUILD_TYPE" = "release" ]; then
+
+            APK_FILE=$(find my_project \
+              -type f \
+              -path "*/build/outputs/apk/release/*.apk" \
+              -print \
+              -quit)
+
+          else
+
+            APK_FILE=$(find my_project \
+              -type f \
+              -path "*/build/outputs/apk/debug/*.apk" \
+              -print \
+              -quit)
+
+          fi
+
+
+          if [ -z "$APK_FILE" ]; then
+
+            echo ""
+            echo "=========================================="
+            echo "ERROR: APK NOT FOUND"
+            echo "=========================================="
+
+            find my_project -type f -name "*.apk" -print
+
+            exit 1
+
+          fi
+
+
+          echo ""
+          echo "=========================================="
+          echo "APK FOUND"
+          echo "=========================================="
+
+          echo "$APK_FILE"
+
+          echo ""
+
+          ls -lh "$APK_FILE"
+
+
+          # Hapus APK lama jika ada
+          rm -f final.apk
+
+          # Copy menjadi satu nama
+          cp "$APK_FILE" final.apk
+
+
+          echo ""
+          echo "FINAL APK:"
+
+          ls -lh final.apk
+
+          echo "APK_PATH=final.apk" >> "$GITHUB_ENV"
+
+
+      # ==========================================
+      # UPLOAD ARTIFACT
+      # ==========================================
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: final.apk
+          if-no-files-found: error
+          retention-days: 3
+
+
+      # ==========================================
+      # SEND TO TELEGRAM
+      # ==========================================
+
+      - name: Send APK to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ github.event.inputs.user_id }}
+          APP_NAME: ${{ github.event.inputs.app_name }}
+          BUILD_TYPE: ${{ github.event.inputs.build_type }}
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "SENDING APK TO TELEGRAM"
+          echo "=========================================="
+
+
+          # ==========================================
+          # CHECK APK
+          # ==========================================
+
+          if [ ! -f "final.apk" ]; then
+
+            echo "ERROR: final.apk tidak ditemukan!"
+
+            exit 1
+
+          fi
+
+
+          # ==========================================
+          # CHECK BOT TOKEN
+          # ==========================================
+
+          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+
+            echo "ERROR: TELEGRAM_BOT_TOKEN secret kosong!"
+
+            exit 1
+
+          fi
+
+
+          # ==========================================
+          # CHECK CHAT ID
+          # ==========================================
+
+          if [ -z "$CHAT_ID" ]; then
+
+            echo "ERROR: Telegram User ID kosong!"
+
+            exit 1
+
+          fi
+
+
+          echo ""
+          echo "APK Information:"
+
+          ls -lh final.apk
+
+          echo ""
+
+          echo "Chat ID tersedia."
+
+
+          # ==========================================
+          # CAPTION
+          # ==========================================
+
+          CAPTION="✅ Build ${BUILD_TYPE} Selesai!
+
+📱 Project: ${APP_NAME}"
+
+
+          # ==========================================
+          # SEND FILE
+          # ==========================================
+
+          echo ""
+          echo "Uploading APK to Telegram..."
+
+
+          RESPONSE=$(curl \
+            -sS \
+            --fail-with-body \
+            -X POST \
+            -F "chat_id=${CHAT_ID}" \
+            -F "document=@final.apk" \
+            -F "caption=${CAPTION}" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+            || true)
+
+
+          echo ""
+          echo "=========================================="
+          echo "TELEGRAM RESPONSE"
+          echo "=========================================="
+
+          echo "$RESPONSE"
+
+
+          # ==========================================
+          # CHECK TELEGRAM RESULT
+          # ==========================================
+
+          if echo "$RESPONSE" | grep -q '"ok":true'; then
+
+            echo ""
+
+            echo "=========================================="
+            echo "SUCCESS"
+            echo "=========================================="
+
+            echo "APK BERHASIL DIKIRIM KE TELEGRAM!"
+
+          else
+
+            echo ""
+
+            echo "=========================================="
+            echo "TELEGRAM SEND FAILED"
+            echo "=========================================="
+
+            echo ""
+
+            echo "Telegram tidak menerima APK."
+
+            echo "Periksa response di atas."
+
+            exit 1
+
+          fi
